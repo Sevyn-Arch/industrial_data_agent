@@ -1,0 +1,12 @@
+# ============================================================
+# 工业数据分析 Agent 系统 —— 本地工具链依赖（非 Web 运行必需）
+# 安装：python -m pip install -r requirements-dev.txt
+# 用途：生成交付文档（batch_md2docx.py / generate_ppt.py）与本地打包（package_submission.py）
+# ============================================================
+-r requirements.txt
+
+# Word 文档生成（docs/*.docx）
+python-docx>=1.1,<2.0
+
+# PPT 生成（工业数据分析Agent系统_项目简介.pptx）
+python-pptx>=1.0,<2.0

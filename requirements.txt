@@ -1,0 +1,38 @@
+# ============================================================
+# 工业数据分析 Agent 系统 —— 运行依赖（Streamlit Community Cloud 直接使用本文件）
+# 安装：python -m pip install -r requirements.txt
+#
+# 版本策略：全部为「已验证可协同工作」的区间约束（Python 3.10–3.12 / Linux）；
+# 不使用无上限的宽松约束，避免 numpy 2.x、openai 2.x 等大版本升级带来不兼容。
+# 文档生成类工具（python-docx / python-pptx）不属于 Web 应用运行依赖，见 requirements-dev.txt。
+# ============================================================
+
+# ---- Web 交互框架 ----
+# 使用到的 API（tabs / cache_resource / file_uploader / download_button / rerun /
+# use_container_width）在本机 1.36–1.37 上完成全量验证；上限 <1.40 固定到已验证区间，
+# 避免云端自动安装更新版本后出现参数弃用/移除导致无法启动。
+streamlit>=1.36,<1.40
+
+# ---- 数据处理 ----
+pandas>=2.2,<2.3
+numpy>=1.26,<2.0
+scipy>=1.13,<1.15
+
+# ---- 机器学习 ----
+scikit-learn>=1.5,<1.6
+joblib>=1.4,<2.0
+
+# ---- 可视化 ----
+matplotlib>=3.9,<3.10
+seaborn>=0.13,<0.14
+
+# ---- LLM 调用（兼容 DeepSeek / OpenAI 协议） ----
+# 注意：openai<=1.55 会向 httpx.Client 传已被移除的 proxies 参数（httpx>=0.28 会报 TypeError），
+# 因此下限固定为已验证兼容的 1.109.x；上限 <2 避免未来大版本破坏 chat.completions 接口。
+openai>=1.109.1,<2.0
+
+# ---- 配置管理 ----
+python-dotenv>=1.0,<2.0
+
+# ---- 测试（部署时一并安装；体积小，便于云端自检） ----
+pytest>=8.0,<9.0

@@ -1,0 +1,61 @@
+# ============================================================
+# 工业数据分析 Agent 系统 —— Git 忽略清单
+# 目标：任何密钥、虚拟环境、运行产物都不进入公开仓库
+# ============================================================
+
+# ---------- 密钥与本地配置（最重要） ----------
+.env
+.env.*
+!.env.example
+config/.env
+config/.env.*
+!config/.env.example
+.streamlit/secrets.toml
+secrets.toml
+*.pem
+*.key
+
+# ---------- 虚拟环境 / 依赖缓存 ----------
+venv/
+.venv/
+env/
+ENV/
+virtualenv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# ---------- Python 运行缓存 ----------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# ---------- 运行产物（图表 / 报告 / 模型 / 沙箱工作区） ----------
+output/
+output/.sandbox/
+*.joblib
+*.meta.json
+*.log
+
+# ---------- 用户上传的数据（示例数据除外） ----------
+data/*
+!data/.gitkeep
+!data/sample_process_data.csv
+
+# ---------- IDE / 系统文件 ----------
+.idea/
+.vscode/
+*.iml
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ---------- 本地交付/打包产物（可选提交时手动添加） ----------
+工业数据分析Agent系统_提交材料/

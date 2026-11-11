@@ -1,0 +1,3 @@
+# Streamlit Community Cloud 会在构建镜像时自动安装本文件中的 apt 依赖
+# 用途：提供中文字体，保证 Linux 云端图表中的中文标题/坐标轴正常显示（不出现方块）
+fonts-noto-cjk
