@@ -418,6 +418,7 @@ class IndustrialDataAgent:
                     "stdout": execution.get("stdout", ""),
                     "stderr": execution.get("stderr", ""),
                     "error": execution.get("error"),
+                    "error_type": execution.get("error_type"),
                     "violations": execution.get("violations", []),
                     "result": execution.get("result"),
                     "code_path": execution.get("code_path"),
@@ -451,8 +452,14 @@ class IndustrialDataAgent:
 
             if execution_ok:
                 return ok(data, f"分析完成（{INTENT_NAMES.get(intent, intent)}，耗时 {duration:.2f}s）", charts=charts)
+            # 安全拦截 / 运行错误 / 超时 三类失败使用后端给出的面向用户文案
+            user_message = (
+                str(execution.get("message") or "")
+                if execution.get("error_type")
+                else f"分析未成功完成：{execution.get('error') or '代码执行失败'}"
+            )
             return fail(
-                f"分析未成功完成：{execution.get('error') or '代码执行失败'}",
+                user_message,
                 execution.get("error"),
                 data=data,
                 charts=charts,

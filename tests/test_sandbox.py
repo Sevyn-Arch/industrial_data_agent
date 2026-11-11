@@ -55,6 +55,7 @@ def test_valid_code_executes_and_emits_result(policy: SandboxPolicy) -> None:
     assert abs(result["data"]["result"]["mean"] - 3.0) < 1e-9
     assert "done" in result["data"]["stdout"]
     assert result["data"]["timed_out"] is False
+    assert result["data"]["error_type"] is None
 
 
 def test_chart_is_collected(policy: SandboxPolicy) -> None:
@@ -69,6 +70,33 @@ def test_chart_is_collected(policy: SandboxPolicy) -> None:
     assert result["status"] == "success"
     assert len(result["charts"]) >= 1
     assert all(Path(item).exists() for item in result["charts"])
+
+
+def test_generated_code_chinese_fonts_are_enforced(policy: SandboxPolicy) -> None:
+    """生成代码自行覆盖字体时，保存图表前应被统一字体重置为跨平台中文字体。"""
+    from analytics import configure_chart_fonts
+
+    code = (
+        "import matplotlib.pyplot as plt\n"
+        "plt.rcParams['font.sans-serif'] = ['DejaVu Sans']\n"
+        "fig, ax = plt.subplots()\n"
+        "ax.plot([-1, 0, 1], [1, 0, 1])\n"
+        "ax.set_title('中文标题')\n"
+        "ax.set_xlabel('时间')\n"
+        "save_chart('font_check.png')\n"
+        "emit_result({\n"
+        "    'title_font': ax.title.get_fontfamily(),\n"
+        "    'rc_fonts': plt.rcParams['font.sans-serif'][:2],\n"
+        "    'unicode_minus': plt.rcParams['axes.unicode_minus'],\n"
+        "})\n"
+    )
+    result = _run(code, policy)
+    assert result["status"] == "success", result["data"]["stderr"]
+    payload = result["data"]["result"]
+    expected = configure_chart_fonts()
+    assert payload["unicode_minus"] is False
+    assert payload["rc_fonts"][0] == expected, "保存后 rcParams 应恢复为全局中文字体"
+    assert payload["title_font"][0] == expected, "已创建的中文标题应被重新设置字体"
 
 
 def test_generated_code_can_reuse_project_library(policy: SandboxPolicy) -> None:
@@ -110,6 +138,8 @@ def test_dangerous_code_is_rejected(code: str, keyword: str) -> None:
     assert result["status"] == "error"
     assert result["data"]["violations"]
     assert result["data"]["exit_code"] is None  # 未启动子进程
+    assert result["data"]["error_type"] == "security"
+    assert result["message"] == "代码包含危险操作，已被安全沙箱拦截，禁止执行"
 
 
 def test_path_escape_is_rejected() -> None:
@@ -160,6 +190,8 @@ def test_runtime_error_is_captured(policy: SandboxPolicy) -> None:
     assert result["status"] == "error"
     assert result["data"]["exit_code"] != 0
     assert result["data"]["stderr"]
+    assert result["data"]["error_type"] == "runtime"
+    assert result["message"] == "分析代码执行失败，请检查字段名或调整分析需求"
 
 
 def test_timeout_kills_process() -> None:
@@ -170,6 +202,8 @@ def test_timeout_kills_process() -> None:
     elapsed = time.perf_counter() - started
     assert result["status"] == "error"
     assert result["data"]["timed_out"] is True
+    assert result["data"]["error_type"] == "timeout"
+    assert result["message"] == "分析任务执行超时，已强制终止，请简化分析需求"
     assert elapsed < 45, f"超时终止耗时过长：{elapsed:.1f}s"
 
 

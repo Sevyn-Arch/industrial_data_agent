@@ -27,6 +27,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import sys
 import time
 import uuid
 from pathlib import Path
@@ -60,7 +61,10 @@ __all__ = [
     "safe_float",
     "truncate_text",
     "get_logger",
+    "configure_chart_fonts",
     "setup_plot_style",
+    "apply_font_to_figure",
+    "font_candidates",
 ]
 
 # --------------------------------------------------------------------------- #
@@ -284,59 +288,170 @@ def truncate_text(text: Any, limit: int = 20000, tail_note: str = "\n...[输出�
 # --------------------------------------------------------------------------- #
 # 三、绘图公共配置
 # --------------------------------------------------------------------------- #
-#: 中文字体候选列表（按优先级排列）
-_CJK_FONT_CANDIDATES: tuple[str, ...] = (
+#: 各平台的中文字体候选（按优先级排列）
+#: Linux 云端由 packages.txt 安装 fonts-noto-cjk，因此优先 Noto Sans CJK SC；
+#: Windows 本地优先微软雅黑 / 黑体；macOS 优先苹方。最终都以 DejaVu Sans 兜底。
+_LINUX_FONT_CANDIDATES: tuple[str, ...] = (
+    "Noto Sans CJK SC",
+    "Noto Sans CJK JP",
+    "Noto Sans CJK TC",
+    "Source Han Sans SC",
+    "WenQuanYi Zen Hei",
+    "WenQuanYi Micro Hei",
     "Microsoft YaHei",
     "SimHei",
-    "Noto Sans CJK SC",
-    "Source Han Sans SC",
-    "PingFang SC",
-    "WenQuanYi Zen Hei",
     "Arial Unicode MS",
 )
+_WINDOWS_FONT_CANDIDATES: tuple[str, ...] = (
+    "Microsoft YaHei",
+    "SimHei",
+    "SimSun",
+    "Noto Sans CJK SC",
+    "Source Han Sans SC",
+    "Arial Unicode MS",
+)
+_MAC_FONT_CANDIDATES: tuple[str, ...] = (
+    "PingFang SC",
+    "Heiti SC",
+    "STHeiti",
+    "Arial Unicode MS",
+    "Noto Sans CJK SC",
+)
+
+#: 常见 Linux Noto CJK 字体文件路径（字体缓存缺失时手动注册）
+_LINUX_FONT_FILES: tuple[Path, ...] = (
+    Path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"),
+    Path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.otf"),
+    Path("/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc"),
+)
+
 _PLOT_STYLE_READY: bool = False
 _PLOT_FONT_NAME: str = ""
+_PLOT_FAMILIES: tuple[str, ...] = ("DejaVu Sans",)
 
 
-def setup_plot_style() -> str:
-    """初始化 matplotlib 绘图样式（Agg 后端 + 中文字体），幂等。
+def font_candidates(platform_name: str | None = None) -> tuple[str, ...]:
+    """返回指定平台的中文字体候选列表（按优先级）。
+
+    Args:
+        platform_name: ``sys.platform`` 风格的平台名；``None`` 表示当前平台。
 
     Returns:
-        str: 实际生效的中文字体名；未找到中文字体时返回空字符串
-        （此时中文可能显示为方块，但不会影响程序运行）。
+        tuple[str, ...]: 字体名列表（末尾统一追加 ``DejaVu Sans`` 兜底）。
     """
-    global _PLOT_STYLE_READY, _PLOT_FONT_NAME
-    if _PLOT_STYLE_READY:
+    name = str(platform_name if platform_name is not None else sys.platform).lower()
+    if name.startswith("win"):
+        candidates = _WINDOWS_FONT_CANDIDATES
+    elif name.startswith("linux"):
+        candidates = _LINUX_FONT_CANDIDATES
+    else:
+        candidates = _MAC_FONT_CANDIDATES
+    return tuple(candidates) + ("DejaVu Sans",)
+
+
+def _register_linux_fonts() -> None:
+    """在 Linux 下把常见 Noto CJK 字体文件注册进 matplotlib（避免字体缓存未刷新）。"""
+    try:
+        from matplotlib import font_manager
+
+        paths = list(_LINUX_FONT_FILES)
+        fonts_root = Path("/usr/share/fonts")
+        if fonts_root.is_dir():
+            paths.extend(sorted(fonts_root.rglob("NotoSansCJK*.ttc"))[:4])
+        registered = {
+            str(item.fname) for item in font_manager.fontManager.ttflist if getattr(item, "fname", None)
+        }
+        for path in paths:
+            if path.is_file() and str(path) not in registered:
+                try:
+                    font_manager.fontManager.addfont(str(path))
+                except Exception:  # noqa: BLE001 - 单个字体注册失败不影响其它候选
+                    continue
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def configure_chart_fonts(force: bool = False) -> str:
+    """全局统一图表字体配置（所有 matplotlib / seaborn 绘图共用）。
+
+    平台策略：
+
+    * Linux（Streamlit Community Cloud）：优先 ``Noto Sans CJK SC``（由 packages.txt 安装）；
+    * Windows：优先 ``Microsoft YaHei`` / ``SimHei``；
+    * macOS：优先 ``PingFang SC``；
+    * 统一设置 ``axes.unicode_minus = False``，修复负号显示为方块的问题。
+
+    Args:
+        force: 已初始化时是否强制重新应用（用于生成代码覆盖 rcParams 后再次校正）。
+
+    Returns:
+        str: 实际生效的中文字体名；未找到中文字体时返回空字符串（不影响程序运行）。
+    """
+    global _PLOT_STYLE_READY, _PLOT_FONT_NAME, _PLOT_FAMILIES
+    if _PLOT_STYLE_READY and not force:
         return _PLOT_FONT_NAME
     try:
         import matplotlib
 
-        matplotlib.use("Agg", force=True)  # 无界面后端，必须在 pyplot 之前设置
+        if not _PLOT_STYLE_READY:
+            matplotlib.use("Agg", force=True)  # 无界面后端，必须在 pyplot 之前设置
         from matplotlib import font_manager, rcParams
 
-        # 注意：seaborn 主题会覆盖 rcParams，因此必须先应用主题、再设置中文字体
-        try:  # seaborn 为可选依赖，缺失时不影响绘图
-            import seaborn as sns
+        if not _PLOT_STYLE_READY:
+            # 注意：seaborn 主题会覆盖 rcParams，因此必须先应用主题、再设置中文字体
+            try:  # seaborn 为可选依赖，缺失时不影响绘图
+                import seaborn as sns
 
-            sns.set_theme(style="whitegrid")
-        except Exception:  # noqa: BLE001
-            pass
+                sns.set_theme(style="whitegrid")
+            except Exception:  # noqa: BLE001
+                pass
+            if sys.platform.startswith("linux"):
+                _register_linux_fonts()
+            available = {font.name for font in font_manager.fontManager.ttflist}
+            _PLOT_FONT_NAME = next((name for name in font_candidates() if name in available), "")
 
-        available = {font.name for font in font_manager.fontManager.ttflist}
-        _PLOT_FONT_NAME = next((name for name in _CJK_FONT_CANDIDATES if name in available), "")
         families = ([_PLOT_FONT_NAME] if _PLOT_FONT_NAME else []) + ["DejaVu Sans"]
-        rcParams["font.sans-serif"] = families
-        rcParams["font.family"] = "sans-serif"
+        _PLOT_FAMILIES = tuple(dict.fromkeys(families))
+        rcParams["font.family"] = ["sans-serif"]
+        rcParams["font.sans-serif"] = list(_PLOT_FAMILIES)
         rcParams["axes.unicode_minus"] = False  # 解决负号显示为方块的问题
         rcParams["figure.dpi"] = 110
         rcParams["savefig.bbox"] = "tight"
         rcParams["axes.grid"] = True
         rcParams["grid.alpha"] = 0.25
+        rcParams["text.usetex"] = False
     except Exception:  # noqa: BLE001 - 绘图配置失败不应影响分析主流程
         get_logger(__name__).warning("matplotlib 绘图样式初始化失败，将使用默认样式", exc_info=True)
     finally:
         _PLOT_STYLE_READY = True
     return _PLOT_FONT_NAME
+
+
+def setup_plot_style(force: bool = False) -> str:
+    """向后兼容别名：等价于 :func:`configure_chart_fonts`。"""
+    return configure_chart_fonts(force=force)
+
+
+def apply_font_to_figure(figure: Any) -> None:
+    """把全局中文字体强制应用到已创建图表的所有文本对象上。
+
+    生成代码可能先按自己的字体创建标题/坐标轴文本，之后再修改 rcParams 无法回溯生效；
+    因此在保存图片前遍历图内全部 ``Text`` 对象并显式设置字体族，确保中文与负号正常显示。
+    """
+    try:
+        from matplotlib.text import Text
+
+        configure_chart_fonts(force=True)
+        families = list(_PLOT_FAMILIES)
+        if not families:
+            return
+        for text in figure.findobj(Text):
+            try:
+                text.set_fontfamily(families)
+            except Exception:  # noqa: BLE001 - 个别文本对象不可设置时跳过
+                continue
+    except Exception:  # noqa: BLE001 - 字体校正失败不影响绘图
+        return
 
 
 def new_chart_path(prefix: str = "chart", ext: str = CHART_EXT) -> Path:

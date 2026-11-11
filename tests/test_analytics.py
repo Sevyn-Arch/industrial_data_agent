@@ -250,3 +250,48 @@ def test_list_models_envelope() -> None:
     result = ml_models.list_models()
     assert result["status"] == "success"
     assert len(result["data"]["models"]) == 3
+
+
+# --------------------------------------------------------------------------- #
+# 图表字体（跨平台 / 中文 / 负号）
+# --------------------------------------------------------------------------- #
+def test_font_candidates_follow_platform_priority() -> None:
+    """Linux 优先 Noto CJK（云端），Windows 优先微软雅黑，macOS 优先苹方。"""
+    from analytics import font_candidates
+
+    assert font_candidates("linux")[0] == "Noto Sans CJK SC"
+    assert font_candidates("win32")[0] == "Microsoft YaHei"
+    assert font_candidates("darwin")[0] == "PingFang SC"
+    assert font_candidates("linux")[-1] == "DejaVu Sans"
+
+
+def test_configure_chart_fonts_sets_global_rcparams() -> None:
+    """全局字体函数应设置 sans-serif 字体族，并关闭 unicode_minus（修复负号方块）。"""
+    from matplotlib import rcParams
+
+    from analytics import configure_chart_fonts
+
+    configured = configure_chart_fonts(force=True)
+    assert isinstance(configured, str)
+    assert rcParams["axes.unicode_minus"] is False
+    assert list(rcParams["font.family"]) == ["sans-serif"]
+    assert len(rcParams["font.sans-serif"]) >= 1
+
+
+def test_apply_font_to_figure_overrides_existing_text() -> None:
+    """已创建的中文标题应被强制切换到全局中文字体（防止生成代码自行设错字体）。"""
+    import matplotlib.pyplot as plt
+
+    from analytics import apply_font_to_figure, configure_chart_fonts
+
+    chosen = configure_chart_fonts(force=True)
+    figure, axis = plt.subplots()
+    try:
+        axis.set_title("中文标题", fontfamily="DejaVu Sans")
+        axis.set_xlabel("负值 -1")
+        apply_font_to_figure(figure)
+        if chosen:
+            assert chosen in axis.title.get_fontfamily()
+            assert chosen in axis.xaxis.label.get_fontfamily()
+    finally:
+        plt.close(figure)

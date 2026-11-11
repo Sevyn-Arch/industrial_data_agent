@@ -204,3 +204,41 @@ def test_system_status(agent: IndustrialDataAgent) -> None:
     assert data["stats"]["n_datasets"] >= 1
     assert data["settings"]["code_model"]
     assert "api_key_masked" in data["settings"]
+
+
+def test_analyze_surfaces_typed_sandbox_error(agent: IndustrialDataAgent, monkeypatch: pytest.MonkeyPatch) -> None:
+    """安全拦截类失败应以统一文案返回，并把 error_type 透传到前端数据结构。"""
+    typed_message = "代码包含危险操作，已被安全沙箱拦截，禁止执行"
+    detail = "第 1 行：禁止导入模块 os（不在白名单内）"
+
+    def fake_closure(**kwargs):
+        return {
+            "status": "error",
+            "message": typed_message,
+            "error": detail,
+            "charts": [],
+            "data": {
+                "source": "template",
+                "code": "import os\n",
+                "template_reason": "标准场景，命中内置模板",
+                "router_used": False,
+                "execution": {
+                    "status": "error",
+                    "error_type": "security",
+                    "message": typed_message,
+                    "error": detail,
+                    "violations": [detail],
+                    "charts": [],
+                    "exit_code": None,
+                    "timed_out": False,
+                },
+            },
+        }
+
+    monkeypatch.setattr(agent.code_generator, "generate_and_run", fake_closure)
+    result = agent.analyze("统计 inlet_temp_c 的均值", data_file="process_data.csv", with_report=False)
+
+    assert result["status"] == "error"
+    assert result["message"] == typed_message
+    assert result["data"]["execution"]["error_type"] == "security"
+    assert result["data"]["execution"]["violations"] == [detail]

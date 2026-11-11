@@ -32,6 +32,7 @@ from agent.agent_core import IndustrialDataAgent  # noqa: E402
 from agent.code_generator import INTENT_NAMES  # noqa: E402
 from agent.llm_client import get_settings  # noqa: E402
 from analytics import OUTPUT_DIR, REPORT_DIR, ensure_dirs  # noqa: E402
+from sandbox.executor import ERROR_MESSAGES as SANDBOX_ERROR_MESSAGES  # noqa: E402
 from sandbox.executor import SandboxPolicy  # noqa: E402
 
 from analytics import basic_stats  # noqa: E402
@@ -307,6 +308,7 @@ def render_analysis_tab(agent: IndustrialDataAgent, settings: dict[str, Any]) ->
         if run_now:
             if not question.strip():
                 st.warning("请先输入分析需求。")
+                st.caption("🛡️ 所有生成代码均在独立沙箱中执行，系统会拦截危险操作，保障服务器安全")
                 return
             file_name = None if data_choice.startswith("（不指定") else data_choice
             with st.spinner("正在解析意图、生成并执行分析代码..."):
@@ -321,11 +323,18 @@ def render_analysis_tab(agent: IndustrialDataAgent, settings: dict[str, Any]) ->
         result = st.session_state.get("analysis_result")
         if not result:
             st.info("等待执行：输入分析需求后点击「开始分析」。")
+            st.caption("🛡️ 所有生成代码均在独立沙箱中执行，系统会拦截危险操作，保障服务器安全")
             return
 
         data = result.get("data") or {}
+        execution = data.get("execution") or {}
+        error_type = execution.get("error_type")
         st.divider()
-        show_result_message(result, "分析完成")
+        if error_type:
+            # 前端按后端 error_type 展示统一文案（与安全沙箱的三种失败类型一一对应）
+            st.error(SANDBOX_ERROR_MESSAGES.get(error_type, SANDBOX_ERROR_MESSAGES["runtime"]))
+        else:
+            show_result_message(result, "分析完成")
 
         info = st.columns(4)
         info[0].metric("识别意图", data.get("intent_name") or "-")
@@ -349,9 +358,9 @@ def render_analysis_tab(agent: IndustrialDataAgent, settings: dict[str, Any]) ->
         for step in data.get("steps") or []:
             st.markdown(f"- **{step.get('step')}**：{step.get('detail')}")
 
-        execution = data.get("execution") or {}
         if execution.get("violations"):
-            st.error("代码安全校验拦截项：" + "；".join(map(str, execution["violations"])))
+            st.markdown("**安全校验拦截项**")
+            st.code("\n".join(f"- {item}" for item in execution["violations"]), language="text")
 
         if show_code and data.get("code"):
             st.markdown("**生成的 Python 分析代码**")
@@ -364,8 +373,12 @@ def render_analysis_tab(agent: IndustrialDataAgent, settings: dict[str, Any]) ->
             details[1].metric("执行耗时", f"{execution.get('duration_seconds')} 秒")
             details[2].metric("是否超时", "是" if execution.get("timed_out") else "否")
             details[3].metric("工作目录", "独立沙箱目录")
+            if error_type:
+                # 顶部错误横幅已按 error_type 展示统一文案，这里补充类型标签便于排查
+                labels = {"security": "安全拦截", "runtime": "代码运行错误", "timeout": "执行超时"}
+                st.markdown(f"**错误类型**：{labels.get(error_type, '执行错误')}")
             if execution.get("error"):
-                st.warning(f"执行提示：{execution['error']}")
+                st.caption(f"详细错误：{execution['error']}")
             if execution.get("stdout"):
                 st.markdown("**标准输出**")
                 st.code(execution["stdout"], language="text")
@@ -383,6 +396,8 @@ def render_analysis_tab(agent: IndustrialDataAgent, settings: dict[str, Any]) ->
             st.markdown(data["report"])
             base_name = Path(str(data.get("report_path") or "report")).stem
             download_buttons(data["report"], list(data.get("charts") or []), base_name)
+
+        st.caption("🛡️ 所有生成代码均在独立沙箱中执行，系统会拦截危险操作，保障服务器安全")
     except Exception as exc:  # noqa: BLE001
         st.error(f"分析页签渲染失败：{exc}")
 

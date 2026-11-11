@@ -85,9 +85,26 @@ __all__ = [
     "ALLOWED_IMPORTS",
     "FORBIDDEN_BUILTINS",
     "FORBIDDEN_ATTRIBUTES",
+    "ERROR_MESSAGES",
+    "ERROR_TYPE_SECURITY",
+    "ERROR_TYPE_RUNTIME",
+    "ERROR_TYPE_TIMEOUT",
 ]
 
 logger = get_logger(__name__)
+
+# --------------------------------------------------------------------------- #
+# 错误类型与面向用户的提示文案（前端与 Agent 共用同一份）
+# --------------------------------------------------------------------------- #
+ERROR_TYPE_SECURITY = "security"
+ERROR_TYPE_RUNTIME = "runtime"
+ERROR_TYPE_TIMEOUT = "timeout"
+
+ERROR_MESSAGES: dict[str, str] = {
+    ERROR_TYPE_SECURITY: "代码包含危险操作，已被安全沙箱拦截，禁止执行",
+    ERROR_TYPE_RUNTIME: "分析代码执行失败，请检查字段名或调整分析需求",
+    ERROR_TYPE_TIMEOUT: "分析任务执行超时，已强制终止，请简化分析需求",
+}
 
 # --------------------------------------------------------------------------- #
 # 一、静态安全规则
@@ -272,6 +289,7 @@ class ExecutionResult:
     duration_seconds: float = 0.0
     timed_out: bool = False
     error: str | None = None
+    error_type: str | None = None
     code_path: str | None = None
     result_path: str | None = None
     workdir: str | None = None
@@ -289,6 +307,7 @@ class ExecutionResult:
             "duration_seconds": round(self.duration_seconds, 4),
             "timed_out": self.timed_out,
             "error": self.error,
+            "error_type": self.error_type,
             "code_path": self.code_path,
             "result_path": self.result_path,
             "workdir": self.workdir,
@@ -324,13 +343,43 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import seaborn as sns
+from matplotlib.figure import Figure as _Figure
 
-plt.rcParams["font.sans-serif"] = [
-    "Microsoft YaHei", "SimHei", "Noto Sans CJK SC", "Noto Sans CJK JP",
-    "WenQuanYi Zen Hei", "Arial Unicode MS", "DejaVu Sans",
-]
-plt.rcParams["axes.unicode_minus"] = False
+# 统一字体配置：Linux（云端）优先 Noto Sans CJK SC，Windows 优先微软雅黑 / 黑体，
+# 并关闭 unicode_minus 以修复负号方块问题。配置与项目算法库共用同一实现。
+try:
+    from analytics import apply_font_to_figure, configure_chart_fonts
+except Exception:  # 项目模块不可用时退化为内置候选列表
+    def configure_chart_fonts(force=False):
+        plt.rcParams["font.sans-serif"] = [
+            "Noto Sans CJK SC", "Noto Sans CJK JP", "Microsoft YaHei", "SimHei",
+            "WenQuanYi Zen Hei", "Arial Unicode MS", "DejaVu Sans",
+        ]
+        plt.rcParams["font.family"] = ["sans-serif"]
+        plt.rcParams["axes.unicode_minus"] = False
+        return plt.rcParams["font.sans-serif"][0]
+
+    def apply_font_to_figure(figure):
+        return None
+
+configure_chart_fonts()
 plt.rcParams["savefig.bbox"] = "tight"
+
+# 生成代码可能自行覆盖 rcParams（例如设置成 DejaVu Sans），导致中文变成方块。
+# 这里在每次保存图片前统一校正字体，并回溯修改图内已创建的标题/坐标轴等文本。
+_ORIGINAL_FIGURE_SAVEFIG = _Figure.savefig
+
+
+def _savefig_with_chinese_fonts(self, *args, **kwargs):
+    try:
+        configure_chart_fonts(force=True)
+        apply_font_to_figure(self)
+    except Exception:
+        pass
+    return _ORIGINAL_FIGURE_SAVEFIG(self, *args, **kwargs)
+
+
+_Figure.savefig = _savefig_with_chinese_fonts
 
 DATA_DIR = _pathlib.Path(_os.environ["SANDBOX_DATA_DIR"])
 CHART_DIR = _pathlib.Path(_os.environ["SANDBOX_CHART_DIR"])
@@ -739,10 +788,11 @@ def execute_code(
             is_valid, violations = validate_code(code, policy, allowed_roots=(effective_data_dir,))
             if not is_valid:
                 result.violations = violations
+                result.error_type = ERROR_TYPE_SECURITY
                 result.error = "代码未通过安全校验：" + "；".join(violations[:5])
                 result.duration_seconds = time.perf_counter() - started
                 payload = result.to_dict()
-                return fail(result.error, data=payload, **_extras(payload))
+                return fail(ERROR_MESSAGES[ERROR_TYPE_SECURITY], result.error, data=payload, **_extras(payload))
 
         # 2) 独立运行目录（目录权限限制：cwd 限定在空目录内）
         run_dir = SANDBOX_WORK_DIR / f"run_{time.strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
@@ -780,6 +830,7 @@ def execute_code(
             result.exit_code = process.returncode
         except subprocess.TimeoutExpired:
             result.timed_out = True
+            result.error_type = ERROR_TYPE_TIMEOUT
             _terminate_tree(process)
             try:
                 stdout, stderr = process.communicate(timeout=5)
@@ -805,6 +856,7 @@ def execute_code(
                 result.error = result_note
         else:
             result.status = "error"
+            result.error_type = ERROR_TYPE_RUNTIME
             tail = [line for line in (result.stderr or "").strip().splitlines() if line.strip()]
             result.error = tail[-1] if tail else f"子进程异常退出，退出码 {result.exit_code}"
 
@@ -818,14 +870,16 @@ def execute_code(
             if result.error:
                 message += f"；提示：{result.error}"
             return ok(data, message, charts=result.charts, **_extras(data))
-        return fail(result.error or "代码执行失败", data=data, charts=result.charts, **_extras(data))
+        user_message = ERROR_MESSAGES.get(result.error_type or "", result.error or "分析代码执行失败")
+        return fail(user_message, result.error or "代码执行失败", data=data, charts=result.charts, **_extras(data))
     except Exception as exc:  # noqa: BLE001 - 沙箱自身异常也必须安全返回
         logger.exception("沙箱执行器内部异常")
         result.status = "error"
+        result.error_type = ERROR_TYPE_RUNTIME
         result.error = f"沙箱执行器内部异常：{exc}"
         result.duration_seconds = time.perf_counter() - started
         payload = result.to_dict()
-        return fail("沙箱执行失败", exc, data=payload, **_extras(payload))
+        return fail(ERROR_MESSAGES[ERROR_TYPE_RUNTIME], result.error, data=payload, **_extras(payload))
     finally:
         try:
             if run_dir is not None and not policy.keep_workspace:

@@ -35,6 +35,7 @@ import argparse
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 from collections import Counter
@@ -206,6 +207,23 @@ def _print_tree(root: Path, max_entries: int = 200) -> None:
         depth = len(path.relative_to(root).parts)
         suffix = "/" if path.is_dir() else f"  ({_human_size(path.stat().st_size)})"
         print("  " * depth + path.name + suffix)
+
+
+def _force_rmtree(path: Path) -> bool:
+    """删除目录（兼容 Windows 只读文件），返回是否删除成功。"""
+
+    def _on_error(func: Any, target: str, exc_info: Any) -> None:
+        try:
+            os.chmod(target, stat.S_IWRITE)
+            func(target)
+        except Exception:  # noqa: BLE001 - 尽力删除，失败交由调用方判断
+            pass
+
+    try:
+        shutil.rmtree(path, onerror=_on_error)
+    except Exception:  # noqa: BLE001
+        pass
+    return not path.exists()
 
 
 # --------------------------------------------------------------------------- #
@@ -424,7 +442,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         if package_root.name != PACKAGE_NAME:
             print(f"[错误] 目标目录已存在且名称不符合提交包命名，为避免误删已中止：{package_root}")
             return 1
-        shutil.rmtree(package_root)
+        # 安全保护：目标目录若包含 Git 仓库，说明它已被用作真实工作仓库，
+        # 删除会丢失提交历史，必须中止并提示改用新的输出目录。
+        git_dirs = [item for item in package_root.rglob(".git") if item.is_dir()]
+        if git_dirs:
+            print("[错误] 目标目录内检测到 Git 仓库，为避免删除提交历史已中止：")
+            for item in git_dirs[:3]:
+                print(f"        {item}")
+            print("        请改用 --out-dir 指定新的输出目录，或手工同步更新文件。")
+            return 1
+        if not _force_rmtree(package_root):
+            print(f"[错误] 旧提交包目录无法删除（可能被占用）：{package_root}")
+            return 1
         print("已清理旧的提交包目录以便重建")
 
     # ---------- 目录骨架 ----------

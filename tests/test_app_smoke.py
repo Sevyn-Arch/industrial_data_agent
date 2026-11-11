@@ -31,6 +31,8 @@ def test_first_render_has_no_exception() -> None:
     assert app.title, "页面标题缺失"
     assert len(app.tabs) == 4
     assert any("工业数据分析 Agent 系统" in item.value for item in app.title)
+    captions = [item.value for item in app.caption]
+    assert any("所有生成代码均在独立沙箱中执行" in text for text in captions)
 
 
 def test_data_tab_and_toolbox_render() -> None:
@@ -60,3 +62,48 @@ def test_natural_language_analysis_end_to_end() -> None:
     assert "分析结论" in markdown_blob or "工业数据分析报告" in markdown_blob
     metric_labels = [item.label for item in app.metric]
     assert "识别意图" in metric_labels
+
+
+@pytest.mark.parametrize(
+    "error_type, expected_text",
+    [
+        ("security", "代码包含危险操作，已被安全沙箱拦截，禁止执行"),
+        ("runtime", "分析代码执行失败，请检查字段名或调整分析需求"),
+        ("timeout", "分析任务执行超时，已强制终止，请简化分析需求"),
+    ],
+)
+def test_sandbox_error_types_render_specific_messages(error_type: str, expected_text: str) -> None:
+    """前端应按后端 error_type 展示三类不同提示，而不是统一的"未知错误"。"""
+    app = _new_app()
+    app.session_state["analysis_result"] = {
+        "status": "error",
+        "message": expected_text,
+        "error": "第 1 行：禁止导入模块 os",
+        "charts": [],
+        "data": {
+            "question": "测试失败提示",
+            "intent_name": "基础描述性统计",
+            "code_source": "template",
+            "generation_strategy": "template-first",
+            "template_reason": "标准场景，命中内置模板",
+            "duration_seconds": 0.5,
+            "steps": [],
+            "code": "import os\n",
+            "report": "",
+            "charts": [],
+            "execution": {
+                "status": "error",
+                "error_type": error_type,
+                "message": expected_text,
+                "error": "第 1 行：禁止导入模块 os",
+                "violations": ["第 1 行：禁止导入模块 os（不在白名单内）"],
+                "exit_code": None,
+                "timed_out": error_type == "timeout",
+                "duration_seconds": 0.1,
+            },
+        },
+    }
+    app.run()
+    assert not app.exception, [str(item.value) for item in app.exception]
+    errors = [item.value for item in app.error]
+    assert any(expected_text in text for text in errors), errors

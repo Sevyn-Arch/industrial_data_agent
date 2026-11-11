@@ -166,6 +166,7 @@ class ReportGenerator:
                 "timed_out": bool(inner.get("timed_out")),
                 "duration_seconds": inner.get("duration_seconds"),
                 "error": inner.get("error") or payload.get("error"),
+                "error_type": inner.get("error_type") or payload.get("error_type"),
                 "violations": list(inner.get("violations") or payload.get("violations") or []),
                 "stdout": truncate_text(inner.get("stdout") or "", 4000),
                 "stderr": truncate_text(inner.get("stderr") or "", 3000),
